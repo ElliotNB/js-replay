@@ -5,7 +5,13 @@
  * 	Licensed under the MIT license:
  * 	http://www.opensource.org/licenses/MIT
  *
- *	jsReplay is a singleton with two modes of operation. You can either tell JS Replay to record user events
+ *	jsReplay is a record and playback tool used for functional regression testing. It is a singleton with two modes of operation: record and playback.
+ *	
+ *	In record mode, jsReplay will record all user events that occur on the page and log them silently in the background. When the recording is stopped, 
+ *	the entire user event log is sent to the console in JSON format.
+ *	
+ *	In playback mode, jsReplay will read in a previously recorded JSON file, simulate all the user events and log any errors or mismatched elements on the page.
+ *	When playback stops, a log of discrepancies and/or errors that occured during the playback is sent to the console in JSON format.
  *
  *	Playback usage:
  *		
@@ -25,7 +31,7 @@
  *
  *		jsReplay.record.stop();
  *		
- *		The test script will be logged to the console a JSON string. Save the JSON to a file for later playback.
+ *		The test script will be logged to the console as a JSON string. Save the JSON to a file for later playback.
  *
  */
 var jsReplay = (function() {

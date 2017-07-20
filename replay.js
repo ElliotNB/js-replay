@@ -41,11 +41,12 @@ var jsReplay = (function() {
 	
 	// Indicates whether or not jsReplay is recording user events. When set to true, jsReplay will not start another recording nor start a playback.
 	var recordInProgress = false;
-	
-	
+
 	return {
 
 		"playback":(function() {
+			
+			var selectorHash = {};
 			
 			/* 	Function: verifyContains 
 					Verifies whether the element specified by the userEvent.selector contains the text stored in userEvent.text
@@ -66,7 +67,7 @@ var jsReplay = (function() {
 					throw new Error("FAIL - element does not contain specified text.");
 				}
 			};
-			
+				
 			/*	Function: simulateEvent
 					Replays the DOM event specified by userEvent -- uses the same event type and same coordinates that were originally recorded for the event.
 				
@@ -78,27 +79,95 @@ var jsReplay = (function() {
 			*/
 			var simulateEvent = function(userEvent) {
 				
-				if (userEvent.hasOwnProperty("clientX") && userEvent.hasOwnProperty("clientY")) {
+				if (userEvent.selector in selectorHash) {
+					var eventTarget = selectorHash[userEvent.selector];
+				} else {
 				
-					// get the target based on the click coordinates
-					var target = document.elementFromPoint(userEvent.clientX, userEvent.clientY);
+					var eventTarget = $(userEvent.selector)[0];
+
+					if (userEvent.hasOwnProperty("clientX") && userEvent.hasOwnProperty("clientY")) {
 					
-					// verify that the target from the coordinates matches the logged CSS selector
-					if (target === $(userEvent.selector)[0]) {
-						console.log("PASS - click target matches selector element.");
-					} else {
-						throw new Error("FAIL - Element at point ("+userEvent.clientX+"px, "+userEvent.clientY+"px) does not match selector " + userEvent.selector);
+						// get the target based on the click coordinates
+						var target = document.elementFromPoint(userEvent.clientX, userEvent.clientY);
+						
+						// verify that the target from the coordinates matches the logged CSS selector
+						if (target === eventTarget) {
+							console.log("PASS - click target matches selector element.");
+							selectorHash[userEvent.selector] = eventTarget;
+						} else {
+							throw new Error("FAIL - Element at point ("+userEvent.clientX+"px, "+userEvent.clientY+"px) does not match selector " + userEvent.selector);
+						}
+						
 					}
-					
 				}
-					
+				
+				var launchTime = new Date().getTime()
+				console.log("simulating ("+launchTime+"): " + userEvent.type + " selector: " + userEvent.selector);
+				
 				switch (userEvent.type) {
-					case "click":
+					case "focusin":
+					case "focusout":
 					case "focus":
-						$(userEvent.selector)[0].focus();
+					case "blur":
+						var event = new FocusEvent(userEvent.type, userEvent);
+						break;
+					case "tap":
+					case "click":
 					case "mouseup":
 					case "mousedown":
 						var event = new MouseEvent(userEvent.type, userEvent);
+						break;
+					case "touchstart":
+					case "touchend":
+					case "touchmove":
+					case "touchcancel":
+						
+						var touchList = [];
+						for (var i = 0; i < userEvent.touches.length; i++) {
+							var touch = userEvent.touches[i];
+							var newTouch = new Touch({
+								"clientX":touch.clientX
+								,"clientY":touch.clientY
+								,"force":touch.force
+								,"identifier":touch.identifier
+								,"pageX":touch.pageX
+								,"pageY":touch.pageY
+								,"radiusX":touch.radiusX
+								,"radiusY":touch.radiusY
+								,"rotationAngle":touch.rotationAngle
+								,"screenX":touch.screenX
+								,"screenY":touch.screenY
+								,"target":$(touch.selector)[0]
+							});
+							touchList.push(newTouch);
+						}
+						
+						userEvent.touches = touchList;
+						
+						var touchList = [];
+						for (var i = 0; i < userEvent.changedTouches.length; i++) {
+							var touch = userEvent.changedTouches[i];
+							var newTouch = new Touch({
+								"clientX":touch.clientX
+								,"clientY":touch.clientY
+								,"force":touch.force
+								,"identifier":touch.identifier
+								,"pageX":touch.pageX
+								,"pageY":touch.pageY
+								,"radiusX":touch.radiusX
+								,"radiusY":touch.radiusY
+								,"rotationAngle":touch.rotationAngle
+								,"screenX":touch.screenX
+								,"screenY":touch.screenY
+								,"target":$(touch.selector)[0]
+							});
+							touchList.push(newTouch);
+						}
+						
+						userEvent.changedTouches = touchList;
+					
+						var event = new TouchEvent(userEvent.type, userEvent);
+						
 						break;
 					case "keypress":
 					case "keydown":
@@ -117,9 +186,10 @@ var jsReplay = (function() {
 						break;
 				}
 				
-				$(userEvent.selector)[0].dispatchEvent(event);
+				eventTarget.dispatchEvent(event);
 				
 			};
+		
 		
 			/*	Constructor function for the playback functionality. Unlike recording, to playback a test the user must 
 				create a new instance of the playback constructor and manually start it.
@@ -167,23 +237,21 @@ var jsReplay = (function() {
 								var delayTime = new Date().getTime();
 								var runSimulator = setInterval(function() {
 									var currentTime = new Date().getTime();
-									
-									for (var i = 0, l = self.userEventLog.length; i < l; i++) {
-										if (currentTime > (self.userEventLog[i].timeStamp + delayTime)) {
-											
-											var userEvent = self.userEventLog.splice(i,1)[0];
+									var userEventLength = self.userEventLog.length;
+									if (currentTime > (self.userEventLog[0].timeStamp + delayTime)) {
+										do {
+											var userEvent = self.userEventLog.splice(0,1)[0];
+											userEventLength--;
 											simulateEvent(userEvent);
-											break;
-											
-										}
-									};
+										} while (userEventLength > 0 && ((currentTime+200) > (self.userEventLog[0].timeStamp + delayTime)));
+									}
 									
-									if (self.userEventLog.length == 0) {
+									if (userEventLength == 0) {
 										clearInterval(runSimulator);
-										console.log("simulator done");
+										console.log("Test script playback finished.");
 										playbackInProgress = false;
 									}
-								},50);
+								},10);
 							} else {
 								throw new Error("Cannot start playback -- there test script record in-progress.");
 							}
@@ -224,11 +292,35 @@ var jsReplay = (function() {
 			
 			var logEvent = function(event) {
 				if (recordInProgress == true) {
+				
 					var userEvent = {"selector":getSelector(event.target)};
 
 					for (var prop in event) {
-						if (["number","string"].indexOf(typeof event[prop]) > -1 && ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
+						if (["number","string","boolean"].indexOf(typeof event[prop]) > -1 && ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
 							userEvent[prop] = event[prop];
+						} else if (["touches","changedTouches"].indexOf(prop) > -1) {
+							console.log("here");
+							userEvent[prop] = [];
+							//var toucheslist = [];
+							for (var i = 0; i < event[prop].length; i++) {
+								var touch = event[prop][i];
+								userEvent[prop].push({
+									"clientX":touch.clientX
+									,"clientY":touch.clientY
+									,"force":touch.force
+									,"identifier":touch.identifier
+									,"pageX":touch.pageX
+									,"pageY":touch.pageY
+									,"radiusX":touch.radiusX
+									,"radiusY":touch.radiusY
+									,"rotationAngle":touch.rotationAngle
+									,"screenX":touch.screenX
+									,"screenY":touch.screenY
+									,"selector":getSelector(touch.target)
+								});
+
+							}
+
 						}
 					}
 					
@@ -238,6 +330,8 @@ var jsReplay = (function() {
 							console.log("LOGGED EVENT:");
 							console.log(userEventLog);
 						}
+					} else {
+						console.warn("Null selector");
 					}
 				}
 			};
@@ -252,7 +346,7 @@ var jsReplay = (function() {
 					var arrNode = [].slice.call(el.parentNode.getElementsByClassName(el.className));
 					var classSelector = el.className.split(" ").join(".");
 					if (arrNode.length == 1) {
-						names.unshift("."+classSelector);
+						names.unshift(el.tagName.toLowerCase()+"."+classSelector);
 					} else {
 						for (var c=1,e=el;e.previousElementSibling;e=e.previousElementSibling,c++); 
 						names.unshift(el.tagName.toLowerCase()+":nth-child("+c+")");
@@ -285,10 +379,16 @@ var jsReplay = (function() {
 				logEvent($.extend(true,event,{"value":$(event.target).val()})); 
 			},true);
 			document.addEventListener('focus',function(event) { logEvent(event); },true);
-			document.addEventListener('blur',function(event) { logEvent(event); },true);
+			document.addEventListener('focusin',function(event) { logEvent(event); },true);
+			document.addEventListener('focusout',function(event) { logEvent(event); },true);
+			document.addEventListener('blur',function(event) { logEvent(event);},true);
 			document.addEventListener('keypress',function(event) { logEvent(event); },true);
 			document.addEventListener('keydown',function(event) { logEvent(event); },true);
 			document.addEventListener('keyup',function(event) { logEvent(event); },true);
+			document.addEventListener('touchstart',function(event) {  logEvent(event); },true);
+			document.addEventListener('touchend',function(event) { logEvent(event); },true);
+			document.addEventListener('touchmove',function(event) { logEvent(event); },true);
+			document.addEventListener('touchcancel',function(event) { logEvent(event); },true);
 			
 			return {
 				"start": function() {

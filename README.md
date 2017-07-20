@@ -39,3 +39,9 @@ jsReplay.record.stop();
 ```
 
 The test script will be logged to the console as a JSON string. Save the JSON to a file for later playback.
+
+## Requirements
+
+At the moment, jsReplay requires jQuery 1.7+. This requirements will be removed in future versions.
+
+jsReplay only supports Chrome and has only been tested in Chrome 59. jsReplay should not be expected to function properly in other web browsers.

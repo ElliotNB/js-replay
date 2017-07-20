@@ -102,7 +102,7 @@ var jsReplay = (function() {
 				}
 				
 				var launchTime = new Date().getTime()
-				console.log("simulating ("+launchTime+"): " + userEvent.type + " selector: " + userEvent.selector);
+				console.log("Simulating ("+launchTime+"): " + userEvent.type + " selector: " + userEvent.selector);
 				
 				switch (userEvent.type) {
 					case "focusin":
@@ -191,7 +191,7 @@ var jsReplay = (function() {
 			};
 		
 		
-			/*	Constructor function for the playback functionality. Unlike recording, to playback a test the user must 
+			/*	Playback constructor function. Unlike recording, to playback a test the user must 
 				create a new instance of the playback constructor and manually start it.
 				
 				Parameters:
@@ -201,67 +201,119 @@ var jsReplay = (function() {
 
 				var self = this;
 			
+				/*	this.window
+						Object, stores the width and height attributes that the playback JSON file was designed to run in. It is essential
+						that the playback occur in a web browser window with the same dimensions as the original test run recording.
+				*/
+				this.window = null;
+				
+				/*	Property: this.userEventLog
+						Array of events, this is where the recorded events are stored. Each event contains most standard event properties as well as 
+						some additional properties (selector and text) used for identifying the element and the contents of the element. The events are ordered
+						oldest to newest (i.e., the events that were recorded first are at the beginning of the array).
+				*/
+				this.userEventLog = null;
+			
 				$.ajax({
 					url: testRunURL,
-					success: function(userEventLog) {
+					success: function(playbackData) {
 						
-						if (Array.isArray(userEventLog)) {
-							self.userEventLog = userEventLog;
+						// Validate the playback file we've received
+						if (typeof playbackData == "object") {
+							
+							// We won't run the playback file without the window attributes (i.e., browser window dimensions)
+							if (typeof playbackData.window == "object") {
+								self.window = playbackData.window;
+							} else {
+								throw new Error("Playback JSON file does not contain required window attributes.");
+							}
+						
+							// Verify that the event_log is an array, if it's not an array, then this is an invalid playback JSON file.
+							if (Array.isArray(playbackData.event_log)) {
+								self.userEventLog = playbackData.event_log;
+							} else {
+								throw new Error("Event log in the JSON playback file is not an array.");
+							}
 						} else {
-							throw new Error("Received an invalid test script event log.");
+							throw new Error("Received an invalid playback JSON file.");
 						}
 					},
 					error: function(jqXHR, textStatus, errorThrown) {
-						throw new Error("Failed to retrieve test script event log.");
+						throw new Error("Failed to retrieve the playback JSON file.");
 					},
 					dataType: "json"
 				});
 
-				this.userEventLog = null;
-			
 			};
 			
 			constructor.prototype = {
 
+				/*	Method: start
+						This method will start the playback of the user event log.
+				*/
 				"start":function() {
 		
 					var self = this;
-					if (this.userEventLog !== null) {
-						if (playbackInProgress == false) {
-							if (recordInProgress == false) {
-							
-								console.log("Starting test script playback.");
-
-								playbackInProgress = true;
-							
-								var delayTime = new Date().getTime();
-								var runSimulator = setInterval(function() {
-									var currentTime = new Date().getTime();
-									var userEventLength = self.userEventLog.length;
-									if (currentTime > (self.userEventLog[0].timeStamp + delayTime)) {
-										do {
-											var userEvent = self.userEventLog.splice(0,1)[0];
-											userEventLength--;
-											simulateEvent(userEvent);
-										} while (userEventLength > 0 && ((currentTime+200) > (self.userEventLog[0].timeStamp + delayTime)));
-									}
-									
-									if (userEventLength == 0) {
-										clearInterval(runSimulator);
-										console.log("Test script playback finished.");
-										playbackInProgress = false;
-									}
-								},10);
-							} else {
-								throw new Error("Cannot start playback -- there test script record in-progress.");
-							}
-						} else {
-							throw new Error("Cannot start playback -- there is already another test playback in-progress.");
-						}
-					} else {
-						throw new Error("Cannot start playback -- have not received a valid test script event log.");
+					
+					if (playbackInProgress !== false) {
+						throw new Error("Cannot start playback -- there is another test playback already in-progress.");
+						return;
 					}
-				},
+					
+					if (recordInProgress !== false) {
+						throw new Error("Cannot start playback -- a recording is already in-progress.");
+						return;
+					}
+					
+					if (window.innerHeight !== this.window.height || window.innerWidth !== this.window.width) {
+						throw new Error("Cannot start playback -- browser window must match dimensions that the playback script was recorded in ("+this.window.width+"px by "+this.window.height+"px). Window is currently "+window.innerWidth+"px by "+window.innerHeight+"px.");
+						return;
+					}
+					
+					console.log("Starting test script playback.");
+
+					playbackInProgress = true;
+				
+					// record the time that the user started the playback
+					var timeStartedPlayback = new Date().getTime();
+					
+					// run the setInterval on a very short 10ms iteration so we can, as closely as possible, siumulate events exactly when they 
+					// were originally fired
+					var runSimulator = setInterval(function() {
+						
+						var currentTime = new Date().getTime();
+						
+						// we store the array length as a variable for performance reasons (faster than continually accessing the .length property).
+						var userEventLength = self.userEventLog.length;
+						
+						// if the current time is greater than the timestamp of the first event in the array (e.g., 3000ms) plus when the playback started, 
+						// then the event should be triggered
+						if (currentTime > (self.userEventLog[0].timeStamp + timeStartedPlayback)) {
+							do {
+								// we're going to trigger this event, so we remove it from the array
+								var userEvent = self.userEventLog.splice(0,1)[0];
+								
+								// reduce the array length, must be done manually since we've stored the length in a variable for performance reasons
+								userEventLength--;
+								
+								// trigger the event
+								simulateEvent(userEvent);
+							
+							// continue this loop for events that occurred up to 200ms in the future. we do this because a simple user action like a mouse click
+							// will trigger multiple events (click, mousedown, mouseup, etc). if those events were separated by even 10ms, then the DOM could change in-between
+							// those events and we'd encounter an element target mismatch. looking forward 200ms and firing them at the same time allows us to avoid this issue.
+							} while (userEventLength > 0 && ((currentTime+200) > (self.userEventLog[0].timeStamp + timeStartedPlayback)));
+						}
+						
+						// if userEventLength is 0, then that means there are no more events to replay
+						if (userEventLength == 0) {
+							clearInterval(runSimulator);
+							console.log("Test script playback finished.");
+							playbackInProgress = false;
+						}
+					},10);
+					
+				}
 				
 			}
 			
@@ -274,6 +326,16 @@ var jsReplay = (function() {
 			var userEventLog = [];
 			var ctrlKeyDown = false;
 			
+			// After recording is starting, startTimeDelay is set to the Unix time difference when the page was loaded and when recording started.
+			// We use this value to adjust the timestamp stored on recorded events -- we don't want the dead time that occurs from when the page is loaded
+			// until the recording is started to be reflected in our playback script.
+			var startTimeDelay = new Date().getTime();
+			
+			/*	Function: _getSelectionText
+					This function will retrieve the value of the text currently selected by the user.
+				
+				Returns: String
+			*/
 			var _getSelectionText = function() {
 				var text = "";
 				var activeEl = document.activeElement;
@@ -290,18 +352,28 @@ var jsReplay = (function() {
 				return text;
 			};
 			
+			/*	Function: logEvent
+					This function will parse the 
+			
+			*/
 			var logEvent = function(event) {
+				
+				// Only record the event if recording is in progress
 				if (recordInProgress == true) {
 				
 					var userEvent = {"selector":getSelector(event.target)};
 
 					for (var prop in event) {
-						if (["number","string","boolean"].indexOf(typeof event[prop]) > -1 && ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
+						// We can only record plain such as string, numbers and booleans in JSON. Objects will require special processing.
+						if (["number","string","boolean"].indexOf(typeof event[prop]) > -1 
+								// Exclude certain event event attributes in order to keep the JSON log as small as possible.
+								// These attributes are not needed to re-create the event during playback.
+								&& ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
 							userEvent[prop] = event[prop];
 						} else if (["touches","changedTouches"].indexOf(prop) > -1) {
-							console.log("here");
+							
 							userEvent[prop] = [];
-							//var toucheslist = [];
+							
 							for (var i = 0; i < event[prop].length; i++) {
 								var touch = event[prop][i];
 								userEvent[prop].push({
@@ -324,6 +396,10 @@ var jsReplay = (function() {
 						}
 					}
 					
+					// Subtract the start time delay from the timestamp so we don't include the dead time (i.e., time between
+					// page load and recording started) in our playback JSON log.
+					userEvent.timeStamp = userEvent.timeStamp - startTimeDelay;
+					
 					if (userEvent.selector !== null) {
 						if (playbackInProgress == false) {
 							userEventLog.push(userEvent);
@@ -336,6 +412,17 @@ var jsReplay = (function() {
 				}
 			};
 			
+			/*	Function: getSelector
+					This function starts at the DOM element specified by 'el' and traverses upward through the DOM tree building out a unique 
+					CSS selector for the DOM element 'el'.
+					
+				Parameters:
+					el - DOM element, the element that we want to determine CSS selector
+					names - Array of strings, records the CSS selectors for the target element and parent elements as we progress up the DOM tree.
+				
+				Returns:
+					String, a unique CSS selector for the target element (el).
+			*/
 			var getSelector = function(el, names) {
 				if (el === document || el === document.documentElement || el === document.body) return null;
 				if (typeof names === "undefined") var names = [];
@@ -391,24 +478,42 @@ var jsReplay = (function() {
 			document.addEventListener('touchcancel',function(event) { logEvent(event); },true);
 			
 			return {
+			
+				/*	Method: start
+						When this method is invoked, jsReplay will begin to record all user events that occur on the web page.
+				*/
 				"start": function() {
 					if (playbackInProgress == false) {
+						
 						console.log("Start recording.");
+						
+						// Record the time that occurred from the page being loaded to the recording started. We will
+						// subtract this value from the timestamp on the events in order to eliminate the dead time from our playback JSON log.
+						startTimeDelay = Math.abs(startTimeDelay - new Date().getTime());
 						recordInProgress = true;
+						
 					} else {
 						throw new Error("Cannot start recording -- test playback is in progress.");
 					}
 				},
+				
+				/*	Method: stop
+						When this method is invoked, jsReplay will stop recording user events and print playback JSON script to the console.
+				*/
 				"stop": function() {
+					
 					console.log("Stop recording.");
+					
 					recordInProgress = false;
-					this.getEvents();
-				},
-				"getEvents": function() {
-					console.log(JSON.stringify(userEventLog));
+					
+					var playbackScript = {
+						"window":{"width":window.innerWidth,"height":window.innerHeight}
+						,"event_log":userEventLog
+					};
+					
+					console.log(JSON.stringify(playbackScript));
 				}
-			};
-			
+			};	
 		})()
 	};
 })();

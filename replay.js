@@ -83,7 +83,11 @@ var jsReplay = (function() {
 					var eventTarget = selectorHash[userEvent.selector];
 				} else {
 				
-					var eventTarget = $(userEvent.selector)[0];
+					if (userEvent.selector === "document") {
+						var eventTarget = document;
+					} else {
+						var eventTarget = $(userEvent.selector)[0];
+					}
 
 					if (userEvent.hasOwnProperty("clientX") && userEvent.hasOwnProperty("clientY")) {
 					
@@ -101,21 +105,26 @@ var jsReplay = (function() {
 					}
 				}
 				
-				var launchTime = new Date().getTime()
-				console.log("Simulating ("+launchTime+"): " + userEvent.type + " selector: " + userEvent.selector);
+				console.log("Simulating scroll ("+(userEvent.timeStamp/1000).toFixed(3)+"s). Selector: " + userEvent.selector);
+				
+				var event = null; 
 				
 				switch (userEvent.type) {
+					case "scroll":
+						$(eventTarget).scrollLeft(userEvent.scrollLeft);
+						$(eventTarget).scrollTop(userEvent.scrollTop);
+						break;
 					case "focusin":
 					case "focusout":
 					case "focus":
 					case "blur":
-						var event = new FocusEvent(userEvent.type, userEvent);
+						event = new FocusEvent(userEvent.type, userEvent);
 						break;
 					case "tap":
 					case "click":
 					case "mouseup":
 					case "mousedown":
-						var event = new MouseEvent(userEvent.type, userEvent);
+						event = new MouseEvent(userEvent.type, userEvent);
 						break;
 					case "touchstart":
 					case "touchend":
@@ -166,16 +175,16 @@ var jsReplay = (function() {
 						
 						userEvent.changedTouches = touchList;
 					
-						var event = new TouchEvent(userEvent.type, userEvent);
+						event = new TouchEvent(userEvent.type, userEvent);
 						
 						break;
 					case "keypress":
 					case "keydown":
 					case "keyup":
-						var event = new KeyboardEvent(userEvent.type, userEvent);
+						event = new KeyboardEvent(userEvent.type, userEvent);
 						break;
 					case "input":
-						var event = new Event(userEvent.type, userEvent);
+						event = new Event(userEvent.type, userEvent);
 						$(userEvent.selector).val(userEvent.value);
 						break;
 					case "contains":
@@ -186,7 +195,9 @@ var jsReplay = (function() {
 						break;
 				}
 				
-				eventTarget.dispatchEvent(event);
+				if (event !== null) {
+					eventTarget.dispatchEvent(event);
+				}
 				
 			};
 		
@@ -299,10 +310,10 @@ var jsReplay = (function() {
 								// trigger the event
 								simulateEvent(userEvent);
 							
-							// continue this loop for events that occurred up to 200ms in the future. we do this because a simple user action like a mouse click
+							// continue this loop for events that occurred up to 50ms in the future. we do this because a simple user action like a mouse click
 							// will trigger multiple events (click, mousedown, mouseup, etc). if those events were separated by even 10ms, then the DOM could change in-between
 							// those events and we'd encounter an element target mismatch. looking forward 200ms and firing them at the same time allows us to avoid this issue.
-							} while (userEventLength > 0 && ((currentTime+200) > (self.userEventLog[0].timeStamp + timeStartedPlayback)));
+							} while (userEventLength > 0 && ((currentTime+50) > (self.userEventLog[0].timeStamp + timeStartedPlayback)));
 						}
 						
 						// if userEventLength is 0, then that means there are no more events to replay
@@ -362,37 +373,44 @@ var jsReplay = (function() {
 				if (recordInProgress == true) {
 				
 					var userEvent = {"selector":getSelector(event.target)};
+					
+					if (event.type === "scroll") {
+						userEvent.type = "scroll";
+						userEvent.scrollTop = $(event.target).scrollTop();
+						userEvent.scrollLeft = $(event.target).scrollLeft();
+						userEvent.timeStamp = event.timeStamp;
+					} else {
+						for (var prop in event) {
+							// We can only record plain such as string, numbers and booleans in JSON. Objects will require special processing.
+							if (["number","string","boolean"].indexOf(typeof event[prop]) > -1 
+									// Exclude certain event event attributes in order to keep the JSON log as small as possible.
+									// These attributes are not needed to re-create the event during playback.
+									&& ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
+								userEvent[prop] = event[prop];
+							} else if (["touches","changedTouches"].indexOf(prop) > -1) {
+								
+								userEvent[prop] = [];
+								
+								for (var i = 0; i < event[prop].length; i++) {
+									var touch = event[prop][i];
+									userEvent[prop].push({
+										"clientX":touch.clientX
+										,"clientY":touch.clientY
+										,"force":touch.force
+										,"identifier":touch.identifier
+										,"pageX":touch.pageX
+										,"pageY":touch.pageY
+										,"radiusX":touch.radiusX
+										,"radiusY":touch.radiusY
+										,"rotationAngle":touch.rotationAngle
+										,"screenX":touch.screenX
+										,"screenY":touch.screenY
+										,"selector":getSelector(touch.target)
+									});
 
-					for (var prop in event) {
-						// We can only record plain such as string, numbers and booleans in JSON. Objects will require special processing.
-						if (["number","string","boolean"].indexOf(typeof event[prop]) > -1 
-								// Exclude certain event event attributes in order to keep the JSON log as small as possible.
-								// These attributes are not needed to re-create the event during playback.
-								&& ["AT_TARGET","BUBBLING_PHASE","CAPTURING_PHASE","NONE","DOM_KEY_LOCATION_STANDARD","DOM_KEY_LOCATION_LEFT","DOM_KEY_LOCATION_RIGHT","DOM_KEY_LOCATION_NUMPAD"].indexOf(prop) == -1) {
-							userEvent[prop] = event[prop];
-						} else if (["touches","changedTouches"].indexOf(prop) > -1) {
-							
-							userEvent[prop] = [];
-							
-							for (var i = 0; i < event[prop].length; i++) {
-								var touch = event[prop][i];
-								userEvent[prop].push({
-									"clientX":touch.clientX
-									,"clientY":touch.clientY
-									,"force":touch.force
-									,"identifier":touch.identifier
-									,"pageX":touch.pageX
-									,"pageY":touch.pageY
-									,"radiusX":touch.radiusX
-									,"radiusY":touch.radiusY
-									,"rotationAngle":touch.rotationAngle
-									,"screenX":touch.screenX
-									,"screenY":touch.screenY
-									,"selector":getSelector(touch.target)
-								});
+								}
 
 							}
-
 						}
 					}
 					
@@ -403,8 +421,7 @@ var jsReplay = (function() {
 					if (userEvent.selector !== null) {
 						if (playbackInProgress == false) {
 							userEventLog.push(userEvent);
-							console.log("LOGGED EVENT:");
-							console.log(userEventLog);
+							console.log("Logged "+userEvent.type+" event.");
 						}
 					} else {
 						console.warn("Null selector");
@@ -424,7 +441,8 @@ var jsReplay = (function() {
 					String, a unique CSS selector for the target element (el).
 			*/
 			var getSelector = function(el, names) {
-				if (el === document || el === document.documentElement || el === document.body) return null;
+				if (el === document || el === document.documentElement) return "document";
+				if (el === document.body) return "body";
 				if (typeof names === "undefined") var names = [];
 				if (el.id) {
 					names.unshift('#'+el.id);
@@ -476,6 +494,7 @@ var jsReplay = (function() {
 			document.addEventListener('touchend',function(event) { logEvent(event); },true);
 			document.addEventListener('touchmove',function(event) { logEvent(event); },true);
 			document.addEventListener('touchcancel',function(event) { logEvent(event); },true);
+			document.addEventListener('scroll',function(event) { logEvent(event); }, true);
 			
 			return {
 			

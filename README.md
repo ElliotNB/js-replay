@@ -42,6 +42,6 @@ The test script will be logged to the console as a JSON string. Save the JSON to
 
 ## Requirements
 
-At the moment, jsReplay requires jQuery 1.7+. This requirements will be removed in future versions.
+jsReplay currently requires jQuery 1.7+. Future versions of jsReplay will not require jQuery.
 
 jsReplay only supports Chrome and has only been tested in Chrome 59. jsReplay should not be expected to function properly in other web browsers.
